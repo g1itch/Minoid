@@ -1,0 +1,33 @@
+
+PageLayout:
+    debug: debug
+    border: dp(12)
+    BoxLayout:
+        orientation: 'vertical'
+        Label:
+            size_hint: 1, 1
+            text: 'Swipe to the left to see logs'
+        Button:
+            size_hint_y: None
+            height: dp(36)
+            text: 'Settings'
+            on_press: app.open_settings()
+    BoxLayout:
+        size_hint_y: 1
+        canvas:
+            Color:
+                rgba: 0.2, 0.2, 0.2, 1
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        ScrollView:
+            do_scroll_x: False
+            do_scroll_y: True
+
+            Label:
+                id: debug
+                size_hint: 1, None
+                height: self.texture_size[1]
+                text_size: self.width-dp(16), None
+                padding: 10, 10
+                markup: True

@@ -1,75 +1,127 @@
 """Kivy app entry point"""
-import logging
+import json
+import sys
 
-from kivy.lang import Builder
-# from kivy.logger import Logger
+from kivy.app import App
+from kivy.logger import Logger
+from kivy.support import install_twisted_reactor
 from kivy.utils import platform
 
+install_twisted_reactor()  # noqa:E402 ! before twisted
 
-class LogHandler(logging.Handler):
-    """The custom handler to populate RecycleView data"""
-    def __init__(self, view, level=logging.NOTSET):
-        super().__init__(level=level)
-        self.data = view.data
+from twisted.internet import reactor
 
-    def emit(self, record):
-        self.data.append({
-            'text': record.levelname
-            + record.message.replace('[', ': ').replace(']', ':')
+from log import SyslogListener
+
+
+class MinoidApp(App):
+    use_kivy_settings = False
+
+    def __init__(self):
+        self.app_config_changed = False
+        super().__init__()
+
+    def build_config(self, config):
+        config.setdefaults('minode', {
+            'debug': False,
+            'connection-limit': 9,
+            'listening-host': '0.0.0.0',
+            'listening-port': '8444'
         })
 
+    def build_settings(self, settings):
+        settings.add_json_panel(self.name, self.config, data="""
+[{
+    "type": "numeric",
+    "title": "Connection Limit",
+    "section": "minode",
+    "key": "connection-limit"
+},
+{
+    "type": "numeric",
+    "title": "Listen on Port",
+    "section": "minode",
+    "key": "listening-port"
+},
+{
+    "type": "bool",
+    "title": "Debug Logging",
+    "section": "minode",
+    "key": "debug"
+}]
+""")
 
-def start_service(data=None):
-    if platform == 'android' and data is None:
+    def close_settings(self, *args):
+        if self.app_config_changed:
+            self.app_config_changed = False
+            start_service(*self.build_app_args())
+        return super().close_settings(*args)
+
+    def build_app_args(self):
+        appconf = self.config['minode']
+        data = [
+            'minode', '--connection-limit', appconf['connection-limit']]
+        if appconf.getboolean('debug'):
+            data.append('--debug')
+        # host = appconf['listening-host']
+        # if host != '0.0.0.0':
+        #     data += ['--host', host]
+        port = appconf.getint('listening-port')
+        if port != 8444:
+            return data + ['-p', str(port)], 'Connect to {}:%s' % port
+
+        return data,
+
+    def on_config_change(self, config, section, *args):
+        if config is self.config and section == 'minode':
+            self.app_config_changed = True
+
+    def build(self):
+        super().build()
+        start_service(*self.build_app_args())
+        reactor.listenUDP(
+            1514, SyslogListener(self.root.debug, self.config['minode']))
+
+        return self.root
+
+
+def start_service(data=[], msg=None):
+    if platform == 'android':
         import android
         from jnius import autoclass
 
-        activity = autoclass('org.kivy.android.PythonActivity').mActivity
+        android.stop_service()
+
         Context = autoclass('android.content.Context')
+        activity = autoclass('org.kivy.android.PythonActivity').mActivity
+
+        # service = autoclass(
+        #     '{}.ServiceMinode'.format(activity.getPackageName()))
+        # service.stop(activity)
 
         wifi_info = activity.getSystemService(
             Context.WIFI_SERVICE).getConnectionInfo()
         ipaddr = wifi_info.getIpAddress()
-
-        # debug
-        android.start_service(title='Minode')
-
-        # service = autoclass(
-        #     '{}.ServiceMinode'.format(activity.getPackageName()))
-        # argument = ''
-        # service.start(activity, argument)
-
-        return '%d.%d.%d.%d' % (
+        ipaddr = '%d.%d.%d.%d' % (
             (ipaddr & 0xff), (ipaddr >> 8 & 0xff),
             (ipaddr >> 16 & 0xff), (ipaddr >> 24 & 0xff))
+
+        Logger.info('APP: Starting the service...')
+
+        if not msg:
+            msg = 'Connect to {}:8444'
+        msg = msg.format(ipaddr)
+
+        # debug
+        android.start_service('Minoid', msg, arg=json.dumps(data))
+
+        # service.start(activity, json.dumps(data))
     else:
-        from minode.app import app
-        app.main()
+        sys.argv = data
+
+        from daemon import app
+        app()
 
 
 if __name__ == '__main__':
-    from kivy.base import runTouchApp
-
-    addr = start_service()
-
-    root = Builder.load_string("""
-<LogItem@Label>
-    size_hint_x: 1
-    text_size: self.width-dp(28), self.height
-
-RecycleView:
-    id: debug
-    viewclass: 'LogItem'
-    RecycleBoxLayout:
-        orientation: 'vertical'
-        default_size_hint: 1, None
-        default_size: 0, dp(28)
-        size_hint_y: None
-        height: self.minimum_height
-""")
-
-    root.data.append({'text': 'Listening %s:8444' % addr})
-    # log = logging.getLogger()
-    # handler = LogHandler(root, logging.DEBUG)
-    # log.addHandler(handler)
-    runTouchApp(root)
+    MinoidApp().run()
